@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai.embeddings import OpenAIEmbeddings
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -54,12 +54,13 @@ chunk_cache = {}
 # Request models
 class ChunkRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=MAX_TEXT_LENGTH)
-    breakpoint_threshold_type: Optional[str] = Field(default="percentile", regex="^(percentile|standard_deviation|interquartile)$")
+    breakpoint_threshold_type: Optional[str] = Field(default="percentile", pattern="^(percentile|standard_deviation|interquartile)$")
     breakpoint_threshold_amount: Optional[float] = Field(default=95, ge=0, le=100)
     api_key: str = Field(..., min_length=1)
     webhook_url: Optional[str] = None
 
-    @validator('text')
+    @field_validator('text')
+    @classmethod
     def validate_text(cls, v):
         if not v.strip():
             raise ValueError("Text cannot be empty")
@@ -67,7 +68,7 @@ class ChunkRequest(BaseModel):
 
 class BatchChunkRequest(BaseModel):
     texts: List[str] = Field(..., min_items=1, max_items=10)
-    breakpoint_threshold_type: Optional[str] = Field(default="percentile", regex="^(percentile|standard_deviation|interquartile)$")
+    breakpoint_threshold_type: Optional[str] = Field(default="percentile", pattern="^(percentile|standard_deviation|interquartile)$")
     breakpoint_threshold_amount: Optional[float] = Field(default=95, ge=0, le=100)
     api_key: str = Field(..., min_length=1)
 
