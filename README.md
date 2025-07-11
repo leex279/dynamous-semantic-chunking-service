@@ -24,7 +24,19 @@ A lightweight, production-ready semantic text chunking service built with FastAP
 
 2. **Set up environment**
    ```bash
+   # Create virtual environment
+   python -m venv venv
+   
+   # Activate virtual environment
+   # On Windows:
+   venv\Scripts\activate
+   # On macOS/Linux:
+   source venv/bin/activate
+   
+   # Install dependencies
    pip install -r requirements.txt
+   
+   # Set up environment variables
    cp .env.example .env
    # Edit .env with your OpenAI API key
    ```
