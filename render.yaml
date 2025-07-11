@@ -21,8 +21,4 @@ services:
         value: 100
       - key: LOG_LEVEL
         value: INFO
-    disk:
-      name: semantic-chunking-disk
-      mountPath: /app/data
-      sizeGB: 1
     autoDeploy: false
