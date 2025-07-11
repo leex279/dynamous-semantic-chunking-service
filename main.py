@@ -56,7 +56,6 @@ class ChunkRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=MAX_TEXT_LENGTH)
     breakpoint_threshold_type: Optional[str] = Field(default="percentile", pattern="^(percentile|standard_deviation|interquartile)$")
     breakpoint_threshold_amount: Optional[float] = Field(default=95, ge=0, le=100)
-    api_key: str = Field(..., min_length=1)
     webhook_url: Optional[str] = None
 
     @field_validator('text')
@@ -70,7 +69,6 @@ class BatchChunkRequest(BaseModel):
     texts: List[str] = Field(..., min_items=1, max_items=10)
     breakpoint_threshold_type: Optional[str] = Field(default="percentile", pattern="^(percentile|standard_deviation|interquartile)$")
     breakpoint_threshold_amount: Optional[float] = Field(default=95, ge=0, le=100)
-    api_key: str = Field(..., min_length=1)
 
 class ChunkResponse(BaseModel):
     chunks: List[str]
@@ -192,9 +190,9 @@ async def health_check():
 @limiter.limit(f"{RATE_LIMIT_PER_MINUTE}/minute")
 async def chunk_text(request: Request, chunk_request: ChunkRequest):
     try:
-        # Validate API key (simple check for demo)
-        if not chunk_request.api_key:
-            raise HTTPException(status_code=401, detail="Invalid API key")
+        # Validate OpenAI API key is configured
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
         
         # Check cache first
         text_hash = get_text_hash(
@@ -245,9 +243,9 @@ async def chunk_text(request: Request, chunk_request: ChunkRequest):
 @limiter.limit(f"{RATE_LIMIT_PER_MINUTE//2}/minute")
 async def batch_chunk_text(request: Request, batch_request: BatchChunkRequest):
     try:
-        # Validate API key
-        if not batch_request.api_key:
-            raise HTTPException(status_code=401, detail="Invalid API key")
+        # Validate OpenAI API key is configured
+        if not OPENAI_API_KEY:
+            raise HTTPException(status_code=500, detail="OpenAI API key not configured")
         
         # Process texts using LangChain SemanticChunker
         chunker = LangChainSemanticChunker(embeddings)

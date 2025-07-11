@@ -42,8 +42,7 @@ def test_api():
         test_data = {
             "text": "This is a test text for semantic chunking.",
             "breakpoint_threshold_type": "percentile",
-            "breakpoint_threshold_amount": 95,
-            "api_key": "test-key"
+            "breakpoint_threshold_amount": 95
         }
         
         response = requests.post(
@@ -57,7 +56,7 @@ def test_api():
             result = response.json()
             print(f"Created {len(result['chunks'])} chunks")
         elif response.status_code == 500:
-            print("⚠️  Chunk endpoint reached processing (expected with test API key)")
+            print("⚠️  Chunk endpoint reached processing (expected without OpenAI API key)")
             print(f"Error: {response.json()}")
         else:
             print(f"❌ Chunk endpoint failed with status {response.status_code}")

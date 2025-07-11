@@ -66,8 +66,7 @@ Chunk a single text into semantic segments.
 {
   "text": "Your text to chunk here...",
   "breakpoint_threshold_type": "percentile",
-  "breakpoint_threshold_amount": 95,
-  "api_key": "your_api_key"
+  "breakpoint_threshold_amount": 95
 }
 ```
 
@@ -94,8 +93,7 @@ Process multiple texts in a single request.
 {
   "texts": ["First text...", "Second text..."],
   "breakpoint_threshold_type": "percentile",
-  "breakpoint_threshold_amount": 95,
-  "api_key": "your_api_key"
+  "breakpoint_threshold_amount": 95
 }
 ```
 
@@ -215,7 +213,7 @@ curl http://localhost:8000/api/health
 # Test chunking endpoint
 curl -X POST http://localhost:8000/api/chunk \
   -H "Content-Type: application/json" \
-  -d '{"text": "Your test text here", "breakpoint_threshold_type": "percentile", "breakpoint_threshold_amount": 95, "api_key": "test"}'
+  -d '{"text": "Your test text here", "breakpoint_threshold_type": "percentile", "breakpoint_threshold_amount": 95}'
 ```
 
 ## Monitoring
