@@ -1,10 +1,10 @@
 # Semantic Chunking Service
 
-A lightweight, production-ready semantic text chunking service built with FastAPI and OpenAI's GPT-4o-mini, designed for deployment on render.com's free tier and seamless integration with n8n workflows.
+A lightweight, production-ready semantic text chunking service built with FastAPI and LangChain's SemanticChunker, designed for deployment on render.com's free tier and seamless integration with n8n workflows.
 
 ## Features
 
-- **Agentic Chunking**: Uses GPT-4o-mini to intelligently split text based on semantic meaning
+- **Semantic Chunking**: Uses LangChain's SemanticChunker with OpenAI embeddings to intelligently split text based on semantic similarity
 - **n8n Integration**: REST API endpoints optimized for n8n workflow automation
 - **Memory Optimized**: Designed for render.com's free tier (256MB RAM, 0.1 CPU)
 - **Caching System**: LRU cache for improved performance and reduced API costs
@@ -53,7 +53,8 @@ Chunk a single text into semantic segments.
 ```json
 {
   "text": "Your text to chunk here...",
-  "max_chunk_size": 1000,
+  "breakpoint_threshold_type": "percentile",
+  "breakpoint_threshold_amount": 95,
   "api_key": "your_api_key"
 }
 ```
@@ -66,6 +67,8 @@ Chunk a single text into semantic segments.
     "total_chunks": 2,
     "original_length": 500,
     "avg_chunk_size": 250,
+    "breakpoint_threshold_type": "percentile",
+    "breakpoint_threshold_amount": 95,
     "processing_time": "2024-01-01T12:00:00Z"
   }
 }
@@ -78,7 +81,8 @@ Process multiple texts in a single request.
 ```json
 {
   "texts": ["First text...", "Second text..."],
-  "max_chunk_size": 1000,
+  "breakpoint_threshold_type": "percentile",
+  "breakpoint_threshold_amount": 95,
   "api_key": "your_api_key"
 }
 ```
@@ -142,7 +146,8 @@ Health check endpoint.
 | `OPENAI_API_KEY` | OpenAI API key | Required |
 | `RATE_LIMIT_PER_MINUTE` | Requests per minute | 60 |
 | `MAX_TEXT_LENGTH` | Maximum text length | 50000 |
-| `MAX_CHUNK_SIZE` | Maximum chunk size | 1000 |
+| `BREAKPOINT_THRESHOLD_TYPE` | Chunking threshold type | percentile |
+| `BREAKPOINT_THRESHOLD_AMOUNT` | Threshold amount | 95 |
 | `CACHE_SIZE` | Number of cached results | 100 |
 | `LOG_LEVEL` | Logging level | INFO |
 
@@ -161,10 +166,10 @@ Health check endpoint.
 
 ## Cost Optimization
 
-- **GPT-4o-mini pricing**: ~$0.001-0.003 per 1000-word document
-- **Intelligent caching**: Reduces repeated API calls
+- **OpenAI Embeddings pricing**: ~$0.00002 per 1000 tokens (text-embedding-3-small)
+- **Intelligent caching**: Reduces repeated embedding calls
 - **Batch processing**: Efficient for multiple texts
-- **Request coalescing**: Optimizes API usage
+- **Semantic chunking**: More accurate than fixed-size chunking
 
 ## Security
 
@@ -198,7 +203,7 @@ curl http://localhost:8000/api/health
 # Test chunking endpoint
 curl -X POST http://localhost:8000/api/chunk \
   -H "Content-Type: application/json" \
-  -d '{"text": "Your test text here", "api_key": "test"}'
+  -d '{"text": "Your test text here", "breakpoint_threshold_type": "percentile", "breakpoint_threshold_amount": 95, "api_key": "test"}'
 ```
 
 ## Monitoring

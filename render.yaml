@@ -13,8 +13,10 @@ services:
         value: 60
       - key: MAX_TEXT_LENGTH
         value: 50000
-      - key: MAX_CHUNK_SIZE
-        value: 1000
+      - key: BREAKPOINT_THRESHOLD_TYPE
+        value: percentile
+      - key: BREAKPOINT_THRESHOLD_AMOUNT
+        value: 95
       - key: CACHE_SIZE
         value: 100
       - key: LOG_LEVEL

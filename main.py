@@ -13,7 +13,8 @@ from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, validator
-from openai import AsyncOpenAI
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_openai.embeddings import OpenAIEmbeddings
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
@@ -35,9 +36,14 @@ RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "50000"))
 MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", "1000"))
 CACHE_SIZE = int(os.getenv("CACHE_SIZE", "100"))
+BREAKPOINT_THRESHOLD_TYPE = os.getenv("BREAKPOINT_THRESHOLD_TYPE", "percentile")
+BREAKPOINT_THRESHOLD_AMOUNT = float(os.getenv("BREAKPOINT_THRESHOLD_AMOUNT", "95"))
 
-# Initialize OpenAI client
-openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+# Initialize OpenAI embeddings
+embeddings = OpenAIEmbeddings(
+    openai_api_key=OPENAI_API_KEY,
+    model="text-embedding-3-small"
+)
 
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
@@ -48,7 +54,8 @@ chunk_cache = {}
 # Request models
 class ChunkRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=MAX_TEXT_LENGTH)
-    max_chunk_size: Optional[int] = Field(default=MAX_CHUNK_SIZE, ge=100, le=5000)
+    breakpoint_threshold_type: Optional[str] = Field(default="percentile", regex="^(percentile|standard_deviation|interquartile)$")
+    breakpoint_threshold_amount: Optional[float] = Field(default=95, ge=0, le=100)
     api_key: str = Field(..., min_length=1)
     webhook_url: Optional[str] = None
 
@@ -60,150 +67,64 @@ class ChunkRequest(BaseModel):
 
 class BatchChunkRequest(BaseModel):
     texts: List[str] = Field(..., min_items=1, max_items=10)
-    max_chunk_size: Optional[int] = Field(default=MAX_CHUNK_SIZE, ge=100, le=5000)
+    breakpoint_threshold_type: Optional[str] = Field(default="percentile", regex="^(percentile|standard_deviation|interquartile)$")
+    breakpoint_threshold_amount: Optional[float] = Field(default=95, ge=0, le=100)
     api_key: str = Field(..., min_length=1)
 
 class ChunkResponse(BaseModel):
     chunks: List[str]
     metadata: Dict[str, Any]
 
-# Agentic Chunker implementation
-class AgenticChunker:
-    def __init__(self, llm_client: AsyncOpenAI):
-        self.llm = llm_client
-        self.chunks = []
+# Semantic Chunker implementation using LangChain
+class LangChainSemanticChunker:
+    def __init__(self, embeddings: OpenAIEmbeddings):
+        self.embeddings = embeddings
         
-    async def extract_propositions(self, text: str) -> List[str]:
+    def create_chunker(self, breakpoint_threshold_type: str = "percentile", breakpoint_threshold_amount: float = 95) -> SemanticChunker:
+        """Create a semantic chunker with specified parameters."""
+        return SemanticChunker(
+            embeddings=self.embeddings,
+            breakpoint_threshold_type=breakpoint_threshold_type,
+            breakpoint_threshold_amount=breakpoint_threshold_amount
+        )
+    
+    def chunk_text(self, text: str, breakpoint_threshold_type: str = "percentile", breakpoint_threshold_amount: float = 95) -> List[str]:
+        """Chunk text using LangChain's SemanticChunker."""
         try:
-            prompt = f"""Extract stand-alone propositions from this text.
-            Each proposition should be self-contained and meaningful.
+            chunker = self.create_chunker(breakpoint_threshold_type, breakpoint_threshold_amount)
             
-            Text: {text}
+            # Split the text into chunks
+            chunks = chunker.split_text(text)
             
-            Return a list of propositions, one per line. Be concise."""
-            
-            response = await self.llm.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=2000
-            )
-            
-            content = response.choices[0].message.content.strip()
-            propositions = [p.strip() for p in content.split('\n') if p.strip()]
-            
-            logger.info(f"Extracted {len(propositions)} propositions from text of length {len(text)}")
-            return propositions
-            
-        except Exception as e:
-            logger.error(f"Error extracting propositions: {e}")
-            raise
-    
-    async def should_add_to_chunk(self, proposition: str, chunk: str) -> bool:
-        try:
-            prompt = f"""Determine if this proposition belongs with this chunk based on semantic similarity.
-            
-            Chunk: {chunk}
-            Proposition: {proposition}
-            
-            Return only 'yes' or 'no'."""
-            
-            response = await self.llm.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.1,
-                max_tokens=10
-            )
-            
-            result = response.choices[0].message.content.strip().lower()
-            return result == 'yes'
-            
-        except Exception as e:
-            logger.error(f"Error checking chunk similarity: {e}")
-            return False
-    
-    async def chunk_text(self, text: str, max_chunk_size: int = MAX_CHUNK_SIZE) -> List[str]:
-        self.chunks = []
-        
-        # Split text into manageable sections if it's too large
-        sections = self._split_into_sections(text, max_length=3000)
-        
-        for section in sections:
-            propositions = await self.extract_propositions(section)
-            
-            for prop in propositions:
-                if not prop:
-                    continue
-                    
-                added = False
-                
-                # Check against existing chunks
-                for i, chunk in enumerate(self.chunks):
-                    # Skip if chunk is already too large
-                    if len(chunk) + len(prop) + 1 > max_chunk_size:
-                        continue
-                        
-                    if await self.should_add_to_chunk(prop, chunk):
-                        self.chunks[i] = f"{chunk} {prop}"
-                        added = True
-                        break
-                
-                # Create new chunk if not added
-                if not added:
-                    self.chunks.append(prop)
-        
-        # Merge small chunks if possible
-        self.chunks = await self._merge_small_chunks(self.chunks, max_chunk_size)
-        
-        return self.chunks
-    
-    def _split_into_sections(self, text: str, max_length: int = 3000) -> List[str]:
-        if len(text) <= max_length:
-            return [text]
-            
-        sections = []
-        sentences = text.split('. ')
-        current_section = ""
-        
-        for sentence in sentences:
-            if len(current_section) + len(sentence) + 2 > max_length:
-                sections.append(current_section.strip())
-                current_section = sentence
-            else:
-                current_section += ". " + sentence if current_section else sentence
-                
-        if current_section:
-            sections.append(current_section.strip())
-            
-        return sections
-    
-    async def _merge_small_chunks(self, chunks: List[str], max_size: int) -> List[str]:
-        if len(chunks) <= 1:
+            logger.info(f"Created {len(chunks)} semantic chunks from text of length {len(text)}")
             return chunks
             
-        merged = []
-        i = 0
-        
-        while i < len(chunks):
-            current_chunk = chunks[i]
+        except Exception as e:
+            logger.error(f"Error chunking text: {e}")
+            raise
+    
+    def batch_chunk_texts(self, texts: List[str], breakpoint_threshold_type: str = "percentile", breakpoint_threshold_amount: float = 95) -> List[List[str]]:
+        """Chunk multiple texts using the same chunker configuration."""
+        try:
+            chunker = self.create_chunker(breakpoint_threshold_type, breakpoint_threshold_amount)
             
-            # Try to merge with next chunks if current is small
-            if len(current_chunk) < max_size // 2 and i + 1 < len(chunks):
-                next_chunk = chunks[i + 1]
-                if len(current_chunk) + len(next_chunk) + 1 <= max_size:
-                    # Check if they should be merged
-                    if await self.should_add_to_chunk(next_chunk, current_chunk):
-                        current_chunk = f"{current_chunk} {next_chunk}"
-                        i += 1
+            results = []
+            for text in texts:
+                chunks = chunker.split_text(text)
+                results.append(chunks)
+                
+            logger.info(f"Processed {len(texts)} texts into chunks")
+            return results
             
-            merged.append(current_chunk)
-            i += 1
-            
-        return merged
+        except Exception as e:
+            logger.error(f"Error batch chunking texts: {e}")
+            raise
 
 # Cache helper functions
-def get_text_hash(text: str) -> str:
-    return hashlib.md5(text.encode()).hexdigest()
+def get_text_hash(text: str, breakpoint_threshold_type: str = "percentile", breakpoint_threshold_amount: float = 95) -> str:
+    """Generate a hash for caching that includes chunking parameters."""
+    cache_key = f"{text}_{breakpoint_threshold_type}_{breakpoint_threshold_amount}"
+    return hashlib.md5(cache_key.encode()).hexdigest()
 
 @lru_cache(maxsize=CACHE_SIZE)
 def get_cached_result(text_hash: str) -> Optional[Dict[str, Any]]:
@@ -275,18 +196,23 @@ async def chunk_text(request: Request, chunk_request: ChunkRequest):
             raise HTTPException(status_code=401, detail="Invalid API key")
         
         # Check cache first
-        text_hash = get_text_hash(chunk_request.text)
+        text_hash = get_text_hash(
+            chunk_request.text,
+            chunk_request.breakpoint_threshold_type,
+            chunk_request.breakpoint_threshold_amount
+        )
         cached_result = get_cached_result(text_hash)
         
         if cached_result:
             logger.info(f"Cache hit for text hash: {text_hash}")
             return ChunkResponse(**cached_result)
         
-        # Process text
-        chunker = AgenticChunker(openai_client)
-        chunks = await chunker.chunk_text(
+        # Process text using LangChain SemanticChunker
+        chunker = LangChainSemanticChunker(embeddings)
+        chunks = chunker.chunk_text(
             chunk_request.text,
-            chunk_request.max_chunk_size
+            chunk_request.breakpoint_threshold_type,
+            chunk_request.breakpoint_threshold_amount
         )
         
         # Prepare response
@@ -296,6 +222,8 @@ async def chunk_text(request: Request, chunk_request: ChunkRequest):
                 "total_chunks": len(chunks),
                 "original_length": len(chunk_request.text),
                 "avg_chunk_size": sum(len(c) for c in chunks) / len(chunks) if chunks else 0,
+                "breakpoint_threshold_type": chunk_request.breakpoint_threshold_type,
+                "breakpoint_threshold_amount": chunk_request.breakpoint_threshold_amount,
                 "processing_time": datetime.utcnow().isoformat()
             }
         }
@@ -303,7 +231,7 @@ async def chunk_text(request: Request, chunk_request: ChunkRequest):
         # Cache result
         cache_result(text_hash, result)
         
-        logger.info(f"Processed text into {len(chunks)} chunks")
+        logger.info(f"Processed text into {len(chunks)} chunks using {chunk_request.breakpoint_threshold_type} threshold")
         
         return ChunkResponse(**result)
         
@@ -320,30 +248,31 @@ async def batch_chunk_text(request: Request, batch_request: BatchChunkRequest):
         if not batch_request.api_key:
             raise HTTPException(status_code=401, detail="Invalid API key")
         
+        # Process texts using LangChain SemanticChunker
+        chunker = LangChainSemanticChunker(embeddings)
+        chunks_list = chunker.batch_chunk_texts(
+            batch_request.texts,
+            batch_request.breakpoint_threshold_type,
+            batch_request.breakpoint_threshold_amount
+        )
+        
         results = []
-        chunker = AgenticChunker(openai_client)
-        
-        # Process texts concurrently
-        tasks = []
-        for text in batch_request.texts:
-            task = chunker.chunk_text(text, batch_request.max_chunk_size)
-            tasks.append(task)
-        
-        chunks_list = await asyncio.gather(*tasks)
-        
         for i, chunks in enumerate(chunks_list):
             results.append({
                 "index": i,
                 "chunks": chunks,
                 "metadata": {
                     "total_chunks": len(chunks),
-                    "original_length": len(batch_request.texts[i])
+                    "original_length": len(batch_request.texts[i]),
+                    "avg_chunk_size": sum(len(c) for c in chunks) / len(chunks) if chunks else 0
                 }
             })
         
         return {
             "results": results,
             "total_texts": len(batch_request.texts),
+            "breakpoint_threshold_type": batch_request.breakpoint_threshold_type,
+            "breakpoint_threshold_amount": batch_request.breakpoint_threshold_amount,
             "processing_time": datetime.utcnow().isoformat()
         }
         

@@ -5,7 +5,7 @@
 This document outlines the comprehensive implementation plan for a semantic chunking service designed to:
 - Deploy on render.com's free tier (256MB RAM, 0.1 CPU)
 - Integrate seamlessly with n8n workflows
-- Implement agentic LLM-based chunking for superior semantic coherence
+- Implement LangChain SemanticChunker for superior semantic coherence
 - Optimize for resource constraints while maintaining high quality
 
 ## Architecture Design
@@ -15,7 +15,7 @@ This document outlines the comprehensive implementation plan for a semantic chun
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────┐
 │    n8n      │────▶│ Semantic Chunking│────▶│  OpenAI API │
-│  Workflow   │◀────│     Service      │◀────│   (GPT-4)   │
+│  Workflow   │◀────│     Service      │◀────│ (Embeddings)│
 └─────────────┘     └──────────────────┘     └─────────────┘
                             │
                             ▼
@@ -28,52 +28,35 @@ This document outlines the comprehensive implementation plan for a semantic chun
 ### Core Components
 
 1. **FastAPI Application**: Lightweight async web framework
-2. **Agentic Chunker**: LLM-based semantic chunking logic
+2. **LangChain SemanticChunker**: Embedding-based semantic chunking logic
 3. **Cache Layer**: LRU cache for repeated content
 4. **Queue Manager**: Handle requests during spin-up
 5. **Rate Limiter**: Prevent API abuse
 
 ## Technical Implementation
 
-### 1. Agentic Chunking Algorithm
+### 1. LangChain SemanticChunker Implementation
 
-Based on the provided approach, our implementation will:
+Based on LangChain's SemanticChunker, our implementation will:
 
 ```python
-class AgenticChunker:
-    def __init__(self, llm_client):
-        self.llm = llm_client
-        self.chunks = []
-    
-    def extract_propositions(self, text: str) -> List[str]:
-        # Extract stand-alone statements using LLM
-        prompt = f"""Extract stand-alone propositions from this text.
-        Each proposition should be self-contained.
+from langchain_experimental.text_splitter import SemanticChunker
+from langchain_openai.embeddings import OpenAIEmbeddings
+
+class LangChainSemanticChunker:
+    def __init__(self, embeddings: OpenAIEmbeddings):
+        self.embeddings = embeddings
         
-        Text: {text}
-        
-        Return a list of propositions, one per line."""
-        
-        response = self.llm.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
+    def create_chunker(self, breakpoint_threshold_type: str = "percentile", breakpoint_threshold_amount: float = 95) -> SemanticChunker:
+        return SemanticChunker(
+            embeddings=self.embeddings,
+            breakpoint_threshold_type=breakpoint_threshold_type,
+            breakpoint_threshold_amount=breakpoint_threshold_amount
         )
-        return response.choices[0].message.content.strip().split('\n')
     
-    def should_add_to_chunk(self, proposition: str, chunk: str) -> bool:
-        # Determine semantic relationship
-        prompt = f"""Determine if this proposition belongs with this chunk.
-        
-        Chunk: {chunk}
-        Proposition: {proposition}
-        
-        Return 'yes' if they are semantically related, 'no' otherwise."""
-        
-        response = self.llm.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return response.choices[0].message.content.strip().lower() == 'yes'
+    def chunk_text(self, text: str, breakpoint_threshold_type: str = "percentile", breakpoint_threshold_amount: float = 95) -> List[str]:
+        chunker = self.create_chunker(breakpoint_threshold_type, breakpoint_threshold_amount)
+        return chunker.split_text(text)
 ```
 
 ### 2. API Endpoints
@@ -321,10 +304,9 @@ logger.info(f"Chunk request: size={len(text)}, chunks={len(chunks)}")
 
 ## Cost Analysis
 
-### OpenAI API Costs (GPT-4o-mini)
-- Input: $0.00015 per 1K tokens
-- Output: $0.0006 per 1K tokens
-- Estimated cost per 1000-word document: $0.001-0.003
+### OpenAI API Costs (text-embedding-3-small)
+- Embedding: $0.00002 per 1K tokens
+- Estimated cost per 1000-word document: ~$0.00002
 
 ### Optimization Strategies
 1. Use caching aggressively
