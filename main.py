@@ -69,6 +69,9 @@ def parse_api_keys(api_keys_str: str) -> Dict[str, str]:
     return api_keys
 
 valid_api_keys = parse_api_keys(API_KEYS)
+logger.info(f"Loaded {len(valid_api_keys)} API keys")
+if valid_api_keys:
+    logger.debug(f"API key prefixes: {[key[:8] + '...' for key in valid_api_keys.keys()]}")
 
 # Parse allowed origins
 allowed_origins = [origin.strip() for origin in ALLOWED_ORIGINS.split(',') if origin.strip()]
@@ -88,6 +91,7 @@ async def authenticate_api_key(credentials: HTTPAuthorizationCredentials = Depen
     
     if api_key not in valid_api_keys:
         logger.warning(f"Invalid API key attempted: {api_key[:8]}...")
+        logger.debug(f"Valid keys available: {list(valid_api_keys.keys())}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API key",
