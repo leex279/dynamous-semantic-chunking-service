@@ -54,12 +54,20 @@ The service will be available at `http://localhost:8000`
 2. **Connect to Render.com**
 3. **Add environment variables**:
    - `OPENAI_API_KEY`: Your OpenAI API key
+   - `API_KEYS`: Your API keys in format `key1:user1,key2:user2`
+   - `ALLOWED_ORIGINS`: Comma-separated list of allowed origins (optional)
 4. **Deploy using the included render.yaml**
 
 ## API Endpoints
 
 ### POST `/api/chunk`
 Chunk a single text into semantic segments.
+
+**Headers:**
+```
+Authorization: Bearer your_api_key_here
+Content-Type: application/json
+```
 
 **Request:**
 ```json
@@ -88,6 +96,12 @@ Chunk a single text into semantic segments.
 ### POST `/api/batch-chunk`
 Process multiple texts in a single request.
 
+**Headers:**
+```
+Authorization: Bearer your_api_key_here
+Content-Type: application/json
+```
+
 **Request:**
 ```json
 {
@@ -99,6 +113,38 @@ Process multiple texts in a single request.
 
 ### GET `/api/health`
 Health check endpoint.
+
+## Security
+
+The service implements enterprise-grade security features:
+
+### Authentication
+- **API Key Required**: All endpoints (except health) require Bearer token authentication
+- **Multiple API Keys**: Support for multiple API keys with user identification
+- **Environment Configuration**: API keys configured securely via environment variables
+
+### Rate Limiting
+- **Per-API-Key Limits**: Each API key has individual rate limits (default: 100 requests/hour)
+- **Prevents Abuse**: Protects against OpenAI credit exhaustion
+- **Configurable Limits**: Rate limits can be adjusted per deployment
+
+### CORS Security
+- **Restricted Origins**: CORS configured with specific allowed domains
+- **Secure Headers**: Only allows necessary HTTP methods and headers
+- **Environment Control**: Allowed origins configurable via environment variables
+
+### Audit Logging
+- **Request Tracking**: All API requests logged with user identification
+- **Usage Monitoring**: Text length and processing metrics logged
+- **Security Events**: Authentication failures and rate limit violations logged
+
+### Configuration Example
+```bash
+# Security Environment Variables
+API_KEYS=prod_key_123:n8n-production,dev_key_456:n8n-development
+ALLOWED_ORIGINS=https://yourdomain.com,https://n8n.yourdomain.com
+RATE_LIMIT_PER_KEY_HOUR=100
+```
 
 ## n8n Integration
 
@@ -123,9 +169,11 @@ Health check endpoint.
         "method": "POST",
         "url": "https://your-service.onrender.com/api/chunk",
         "jsonParameters": true,
+        "headers": {
+          "Authorization": "Bearer {{$credentials.apiKey}}"
+        },
         "bodyParametersJson": {
-          "text": "={{$json.text}}",
-          "api_key": "={{$credentials.apiKey}}"
+          "text": "={{$json.text}}"
         }
       }
     },
@@ -154,7 +202,10 @@ Health check endpoint.
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENAI_API_KEY` | OpenAI API key | Required |
-| `RATE_LIMIT_PER_MINUTE` | Requests per minute | 60 |
+| `API_KEYS` | API keys in format `key1:user1,key2:user2` | Required |
+| `ALLOWED_ORIGINS` | Comma-separated allowed CORS origins | * |
+| `RATE_LIMIT_PER_MINUTE` | Requests per minute (fallback) | 60 |
+| `RATE_LIMIT_PER_KEY_HOUR` | Requests per API key per hour | 100 |
 | `MAX_TEXT_LENGTH` | Maximum text length | 50000 |
 | `BREAKPOINT_THRESHOLD_TYPE` | Chunking threshold type | percentile |
 | `BREAKPOINT_THRESHOLD_AMOUNT` | Threshold amount | 95 |
@@ -212,6 +263,7 @@ curl http://localhost:8000/api/health
 
 # Test chunking endpoint
 curl -X POST http://localhost:8000/api/chunk \
+  -H "Authorization: Bearer your_api_key_here" \
   -H "Content-Type: application/json" \
   -d '{"text": "Your test text here", "breakpoint_threshold_type": "percentile", "breakpoint_threshold_amount": 95}'
 ```

@@ -45,9 +45,12 @@ def test_api():
             "breakpoint_threshold_amount": 95
         }
         
+        headers = {"Authorization": "Bearer test-key"}
+        
         response = requests.post(
             f"{base_url}/api/chunk", 
             json=test_data,
+            headers=headers,
             timeout=10
         )
         
@@ -55,6 +58,9 @@ def test_api():
             print("✅ Chunk endpoint works!")
             result = response.json()
             print(f"Created {len(result['chunks'])} chunks")
+        elif response.status_code == 401:
+            print("⚠️  Chunk endpoint requires authentication (expected with test API key)")
+            print(f"Error: {response.json()}")
         elif response.status_code == 500:
             print("⚠️  Chunk endpoint reached processing (expected without OpenAI API key)")
             print(f"Error: {response.json()}")

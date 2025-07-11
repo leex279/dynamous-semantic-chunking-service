@@ -9,9 +9,10 @@ from functools import lru_cache
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field, field_validator
 from langchain_experimental.text_splitter import SemanticChunker
 from langchain_openai.embeddings import OpenAIEmbeddings
@@ -33,11 +34,14 @@ logger = logging.getLogger(__name__)
 # Configuration
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "60"))
+RATE_LIMIT_PER_KEY_HOUR = int(os.getenv("RATE_LIMIT_PER_KEY_HOUR", "100"))
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "50000"))
 MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", "1000"))
 CACHE_SIZE = int(os.getenv("CACHE_SIZE", "100"))
 BREAKPOINT_THRESHOLD_TYPE = os.getenv("BREAKPOINT_THRESHOLD_TYPE", "percentile")
 BREAKPOINT_THRESHOLD_AMOUNT = float(os.getenv("BREAKPOINT_THRESHOLD_AMOUNT", "95"))
+API_KEYS = os.getenv("API_KEYS", "")
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "*")
 
 # Initialize OpenAI embeddings
 embeddings = OpenAIEmbeddings(
@@ -50,6 +54,88 @@ limiter = Limiter(key_func=get_remote_address)
 
 # Global cache for chunks
 chunk_cache = {}
+
+# Parse API keys from environment
+def parse_api_keys(api_keys_str: str) -> Dict[str, str]:
+    """Parse API keys from environment variable format: key1:user1,key2:user2"""
+    if not api_keys_str:
+        return {}
+    
+    api_keys = {}
+    for key_pair in api_keys_str.split(','):
+        if ':' in key_pair:
+            key, identifier = key_pair.strip().split(':', 1)
+            api_keys[key.strip()] = identifier.strip()
+    return api_keys
+
+valid_api_keys = parse_api_keys(API_KEYS)
+
+# Parse allowed origins
+allowed_origins = [origin.strip() for origin in ALLOWED_ORIGINS.split(',') if origin.strip()]
+if ALLOWED_ORIGINS == "*":
+    allowed_origins = ["*"]
+
+# Initialize HTTP Bearer security
+security = HTTPBearer()
+
+# Rate limiting tracking per API key
+api_key_usage = {}
+
+# Authentication dependency
+async def authenticate_api_key(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """Validate API key and return user identifier"""
+    api_key = credentials.credentials
+    
+    if api_key not in valid_api_keys:
+        logger.warning(f"Invalid API key attempted: {api_key[:8]}...")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API key",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    user_id = valid_api_keys[api_key]
+    logger.info(f"Authenticated user: {user_id}")
+    return user_id
+
+# Per-API-key rate limiting
+from time import time
+
+def check_api_key_rate_limit(api_key: str, user_id: str) -> bool:
+    """Check if API key is within rate limit"""
+    current_time = time()
+    hour_start = int(current_time // 3600) * 3600
+    
+    if api_key not in api_key_usage:
+        api_key_usage[api_key] = {}
+    
+    if hour_start not in api_key_usage[api_key]:
+        # Clean old hours and start new one
+        api_key_usage[api_key] = {hour_start: 0}
+    
+    current_hour_requests = api_key_usage[api_key].get(hour_start, 0)
+    
+    if current_hour_requests >= RATE_LIMIT_PER_KEY_HOUR:
+        logger.warning(f"Rate limit exceeded for user {user_id}: {current_hour_requests} requests this hour")
+        return False
+    
+    # Increment counter
+    api_key_usage[api_key][hour_start] = current_hour_requests + 1
+    return True
+
+# Combined authentication and rate limiting dependency
+async def authenticate_and_rate_limit(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
+    """Authenticate API key and check rate limits"""
+    api_key = credentials.credentials
+    user_id = await authenticate_api_key(credentials)
+    
+    if not check_api_key_rate_limit(api_key, user_id):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Rate limit exceeded. Maximum {RATE_LIMIT_PER_KEY_HOUR} requests per hour.",
+        )
+    
+    return user_id
 
 # Request models
 class ChunkRequest(BaseModel):
@@ -157,10 +243,10 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # Add rate limit error handler
@@ -187,9 +273,14 @@ async def health_check():
 
 # Main chunking endpoint
 @app.post("/api/chunk", response_model=ChunkResponse)
-@limiter.limit(f"{RATE_LIMIT_PER_MINUTE}/minute")
-async def chunk_text(request: Request, chunk_request: ChunkRequest):
+async def chunk_text(
+    chunk_request: ChunkRequest, 
+    user_id: str = Depends(authenticate_and_rate_limit)
+):
     try:
+        # Audit logging
+        logger.info(f"Chunk request from user {user_id}: text_length={len(chunk_request.text)}, threshold_type={chunk_request.breakpoint_threshold_type}")
+        
         # Validate OpenAI API key is configured
         if not OPENAI_API_KEY:
             raise HTTPException(status_code=500, detail="OpenAI API key not configured")
@@ -240,9 +331,15 @@ async def chunk_text(request: Request, chunk_request: ChunkRequest):
 
 # Batch chunking endpoint
 @app.post("/api/batch-chunk")
-@limiter.limit(f"{RATE_LIMIT_PER_MINUTE//2}/minute")
-async def batch_chunk_text(request: Request, batch_request: BatchChunkRequest):
+async def batch_chunk_text(
+    batch_request: BatchChunkRequest,
+    user_id: str = Depends(authenticate_and_rate_limit)
+):
     try:
+        # Audit logging
+        total_length = sum(len(text) for text in batch_request.texts)
+        logger.info(f"Batch chunk request from user {user_id}: texts_count={len(batch_request.texts)}, total_length={total_length}")
+        
         # Validate OpenAI API key is configured
         if not OPENAI_API_KEY:
             raise HTTPException(status_code=500, detail="OpenAI API key not configured")

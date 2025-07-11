@@ -9,8 +9,14 @@ services:
     envVars:
       - key: OPENAI_API_KEY
         sync: false
+      - key: API_KEYS
+        sync: false
+      - key: ALLOWED_ORIGINS
+        value: "*"
       - key: RATE_LIMIT_PER_MINUTE
         value: 60
+      - key: RATE_LIMIT_PER_KEY_HOUR
+        value: 100
       - key: MAX_TEXT_LENGTH
         value: 50000
       - key: BREAKPOINT_THRESHOLD_TYPE
