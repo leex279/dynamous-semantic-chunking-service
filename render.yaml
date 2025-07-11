@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: semantic-chunking-service
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    numInstances: 1
+    healthCheckPath: /api/health
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: RATE_LIMIT_PER_MINUTE
+        value: 60
+      - key: MAX_TEXT_LENGTH
+        value: 50000
+      - key: MAX_CHUNK_SIZE
+        value: 1000
+      - key: CACHE_SIZE
+        value: 100
+      - key: LOG_LEVEL
+        value: INFO
+    disk:
+      name: semantic-chunking-disk
+      mountPath: /app/data
+      sizeGB: 1
+    autoDeploy: false
